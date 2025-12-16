@@ -168,4 +168,3 @@ app.post("/auth/verify-otp", async (req, res) => {
 
   app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
 })();
-
