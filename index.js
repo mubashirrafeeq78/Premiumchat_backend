@@ -4,9 +4,22 @@ const mysql = require("mysql2/promise");
 const { initDb } = require("./scripts/init-db");
 
 const app = express();
-app.use(cors());
 
-// IMPORTANT: base64 images can be big
+/**
+ * ✅ CORS FIX (GitHub Pages + Mobile Web)
+ * - Allow all origins for now (development)
+ * - Handle preflight automatically
+ */
+app.use(
+  cors({
+    origin: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    credentials: false,
+  })
+);
+app.options("*", cors());
+
 app.use(express.json({ limit: "15mb" }));
 
 const PORT = process.env.PORT || 3000;
@@ -43,10 +56,7 @@ async function connectDb() {
   console.log("✅ MySQL connected");
 }
 
-// Health
-app.get("/", (req, res) => {
-  res.json({ success: true, message: "PremiumChat Backend is running" });
-});
+app.get("/", (req, res) => res.json({ success: true, message: "PremiumChat Backend is running" }));
 
 app.get("/db/health", async (req, res) => {
   try {
@@ -58,12 +68,11 @@ app.get("/db/health", async (req, res) => {
   }
 });
 
-// OTP (demo)
 app.post("/auth/request-otp", async (req, res) => {
   const phone = String(req.body?.phone || "").trim();
   if (!phone) return res.status(400).json({ success: false, message: "Phone required" });
 
-  const code = "123456"; // demo
+  const code = "123456";
   const expiresMinutes = 5;
 
   try {
@@ -102,7 +111,6 @@ app.post("/auth/verify-otp", async (req, res) => {
     const [expCheck] = await pool.query("SELECT NOW() <= ? AS ok", [row.expires_at]);
     if (!expCheck[0].ok) return res.status(400).json({ success: false, message: "OTP expired" });
 
-    // Create user if not exists
     await pool.query(
       "INSERT INTO users (phone, role) VALUES (?, 'buyer') ON DUPLICATE KEY UPDATE phone=VALUES(phone)",
       [phone]
@@ -115,10 +123,6 @@ app.post("/auth/verify-otp", async (req, res) => {
   }
 });
 
-/**
- * Profile Save (buyer/provider)
- * NOTE: city removed completely to avoid that error.
- */
 app.post("/profile/save", async (req, res) => {
   try {
     if (!pool) return res.status(500).json({ success: false, message: "DB not configured" });
@@ -137,13 +141,12 @@ app.post("/profile/save", async (req, res) => {
       return res.status(400).json({ success: false, message: "role must be buyer/provider" });
     }
 
-    // ensure user exists
     await pool.query(
       "INSERT INTO users (phone, role) VALUES (?, ?) ON DUPLICATE KEY UPDATE role=VALUES(role)",
       [phone, role]
     );
 
-    const [u] = await pool.query("SELECT id, phone, role FROM users WHERE phone = ? LIMIT 1", [phone]);
+    const [u] = await pool.query("SELECT id FROM users WHERE phone = ? LIMIT 1", [phone]);
     const userId = u[0].id;
 
     if (role === "buyer") {
@@ -157,15 +160,13 @@ app.post("/profile/save", async (req, res) => {
         `,
         [userId, name, avatarBase64]
       );
-
       return res.json({ success: true, message: "Buyer profile saved", user_id: userId });
     }
 
-    // provider: CNIC + selfie required (basic)
     if (!cnicFrontBase64 || !cnicBackBase64 || !selfieBase64) {
       return res.status(400).json({
         success: false,
-        message: "provider requires cnic_front_base64, cnic_back_base64, selfie_base64"
+        message: "provider requires cnic_front_base64, cnic_back_base64, selfie_base64",
       });
     }
 
@@ -190,7 +191,6 @@ app.post("/profile/save", async (req, res) => {
   }
 });
 
-// Me (for Home screen)
 app.get("/me", async (req, res) => {
   try {
     if (!pool) return res.status(500).json({ success: false, message: "DB not configured" });
@@ -223,7 +223,6 @@ app.get("/me", async (req, res) => {
 (async () => {
   try {
     await connectDb();
-    // Ensure tables (runs once on startup)
     await initDb();
   } catch (e) {
     console.log("❌ Startup error:", e?.message || e);
