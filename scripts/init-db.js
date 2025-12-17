@@ -17,24 +17,26 @@ function getMysqlConfig() {
 async function initDbAndTables() {
   const cfg = getMysqlConfig();
   if (!cfg) {
-    console.log("⚠️ MySQL env vars missing. DB will NOT be used.");
-    return null;
+    throw new Error(
+      "MySQL config missing. Set MYSQL_URL or MYSQLHOST/MYSQLUSER/MYSQLPASSWORD/MYSQLDATABASE (or DB_HOST/DB_USER/DB_PASSWORD/DB_NAME)."
+    );
   }
 
-  const pool = mysql.createPool(
+  const pool = await mysql.createPool(
     typeof cfg === "string"
       ? cfg
       : {
           ...cfg,
           waitForConnections: true,
           connectionLimit: 10,
-          enableKeepAlive: true,
+          queueLimit: 0,
         }
   );
 
   await pool.query("SELECT 1");
   console.log("✅ MySQL connected");
 
+  // 1) users table
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -43,10 +45,30 @@ async function initDbAndTables() {
       name VARCHAR(120) NULL,
       avatar_url TEXT NULL,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      PRIMARY KEY (id)
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_users_phone (phone)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
+  // 2) providers table (CNIC + images in DB as Base64)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS providers (
+      phone VARCHAR(20) NOT NULL,
+      name VARCHAR(120) NULL,
+      role ENUM('provider') NOT NULL DEFAULT 'provider',
+      profile_image_b64 LONGTEXT NULL,
+      cnic_front_b64 LONGTEXT NULL,
+      cnic_back_b64 LONGTEXT NULL,
+      updated_at TIMESTAMP NULL DEFAULT NULL,
+      PRIMARY KEY (phone),
+      CONSTRAINT fk_providers_users_phone
+        FOREIGN KEY (phone) REFERENCES users(phone)
+        ON DELETE CASCADE
+        ON UPDATE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+
+  // 3) otp_codes table
   await pool.query(`
     CREATE TABLE IF NOT EXISTS otp_codes (
       phone VARCHAR(20) NOT NULL,
@@ -57,7 +79,7 @@ async function initDbAndTables() {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
-  console.log("✅ Tables ensured (users, otp_codes)");
+  console.log("✅ Tables ensured (users, providers, otp_codes)");
   return pool;
 }
 
