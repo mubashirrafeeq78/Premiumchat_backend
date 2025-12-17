@@ -1,53 +1,64 @@
- require("mysql2/promise");
+const mysql = require("mysql2/promise");
 
-(async () => {
-  try {
-    // Railway MySQL envs (تمہارے screenshot والے)
-    const host = process.env.MYSQLHOST || "mysql.railway.internal";
-    const user = process.env.MYSQLUSER || "root";
-    const password = process.env.MYSQLPASSWORD;
-    const database = process.env.MYSQLDATABASE || "railway";
-    const port = Number(process.env.MYSQLPORT || 3306);
+function getMysqlConfig() {
+  // Railway plugin variable reference: MYSQL_URL = ${{MySQL.MYSQL_URL}}
+  if (process.env.MYSQL_URL) return process.env.MYSQL_URL;
 
-    if (!password) {
-      throw new Error("MYSQLPASSWORD missing");
-    }
+  const host = process.env.MYSQLHOST || process.env.DB_HOST;
+  const user = process.env.MYSQLUSER || process.env.DB_USER;
+  const password = process.env.MYSQLPASSWORD || process.env.DB_PASSWORD;
+  const database = process.env.MYSQLDATABASE || process.env.DB_NAME;
+  const port = Number(process.env.MYSQLPORT || process.env.DB_PORT || 3306);
 
-    const conn = await mysql.createConnection({
-      host,
-      user,
-      password,
-      database,
-      port,
-    });
+  if (!host || !user || !password || !database) return null;
+  return { host, user, password, database, port };
+}
 
-    console.log("✅ MySQL connected");
+async function initDbAndTables() {
+  const cfg = getMysqlConfig();
+  if (!cfg) {
+    console.log("⚠️ MySQL env vars missing. DB will NOT be used.");
+    return null;
+  }
 
-    // USERS
-    await conn.query(`
-      CREATE TABLE IF NOT EXISTS users (
-        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-        phone VARCHAR(20) NOT NULL UNIQUE,
-        role ENUM('buyer','provider') NOT NULL DEFAULT 'buyer',
-        name VARCHAR(120),
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-    `);
+  const pool = mysql.createPool(
+    typeof cfg === "string"
+      ? cfg
+      : {
+          ...cfg,
+          waitForConnections: true,
+          connectionLimit: 10,
+          enableKeepAlive: true,
+        }
+  );
 
-    // OTP
-    await conn.query(`
-      CREATE TABLE IF NOT EXISTS otp_codes (
-        phone VARCHAR(20) NOT NULL,
-        code VARCHAR(10) NOT NULL,
-        expires_at TIMESTAMP NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        INDEX (phone)
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-    `);
+  await pool.query("SELECT 1");
+  console.log("✅ MySQL connected");
 
-    console.log("✅ Tables created successfully");
-    await conn.end();
-    process.exit(0);
-  } catch (err) {
-    console.error("❌ DB init failed:", err.message);
-    process.exit(1)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      phone VARCHAR(20) NOT NULL UNIQUE,
+      role ENUM('buyer','provider') NOT NULL DEFAULT 'buyer',
+      name VARCHAR(120) NULL,
+      avatar_url TEXT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS otp_codes (
+      phone VARCHAR(20) NOT NULL,
+      code VARCHAR(10) NOT NULL,
+      expires_at TIMESTAMP NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_phone (phone)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+
+  console.log("✅ Tables ensured (users, otp_codes)");
+  return pool;
+}
+
+module.exports = { initDbAndTables };
