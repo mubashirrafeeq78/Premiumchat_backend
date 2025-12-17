@@ -1,4 +1,4 @@
-const mysql = require("mysql2/promise");
+ require("mysql2/promise");
 
 (async () => {
   try {
@@ -50,6 +50,4 @@ const mysql = require("mysql2/promise");
     process.exit(0);
   } catch (err) {
     console.error("❌ DB init failed:", err.message);
-    process.exit(1);
-  }
-})();
+    process.exit(1)
