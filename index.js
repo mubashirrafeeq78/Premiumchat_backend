@@ -6,24 +6,24 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Railway پر PORT env سے آتا ہے
 const PORT = process.env.PORT || 3000;
 
 /**
- * Railway MySQL plugin عام طور پر یہ env دیتا ہے:
+ * Railway MySQL plugin میں اکثر یہ env آتے ہیں:
  * MYSQLHOST, MYSQLUSER, MYSQLPASSWORD, MYSQLDATABASE, MYSQLPORT
- * ہم MYSQL_URL بھی support کر رہے ہیں اگر موجود ہو۔
+ *
+ * بعض اوقات single URL بھی ہوتا ہے:
+ * MYSQL_URL or DATABASE_URL
  */
 function getMysqlConfig() {
-  if (process.env.MYSQL_URL) {
-    return process.env.MYSQL_URL; // e.g. mysql://user:pass@host:port/db
-  }
+  const url = process.env.MYSQL_URL || process.env.DATABASE_URL;
+  if (url && String(url).trim().length > 0) return String(url).trim();
 
-  const host = process.env.MYSQLHOST || process.env.DB_HOST;
-  const user = process.env.MYSQLUSER || process.env.DB_USER;
-  const password = process.env.MYSQLPASSWORD || process.env.DB_PASSWORD;
-  const database = process.env.MYSQLDATABASE || process.env.DB_NAME;
-  const port = Number(process.env.MYSQLPORT || process.env.DB_PORT || 3306);
+  const host = process.env.MYSQLHOST;
+  const user = process.env.MYSQLUSER;
+  const password = process.env.MYSQLPASSWORD;
+  const database = process.env.MYSQLDATABASE;
+  const port = Number(process.env.MYSQLPORT || 3306);
 
   if (!host || !user || !password || !database) return null;
 
@@ -35,7 +35,7 @@ let pool = null;
 async function connectDb() {
   const cfg = getMysqlConfig();
   if (!cfg) {
-    console.log("⚠️ MySQL env vars missing. DB will NOT be used.");
+    console.log("❌ MySQL env vars missing. DB NOT connected.");
     return;
   }
 
@@ -46,11 +46,10 @@ async function connectDb() {
           ...cfg,
           waitForConnections: true,
           connectionLimit: 10,
-          enableKeepAlive: true
+          enableKeepAlive: true,
         }
   );
 
-  // Test ping
   await pool.query("SELECT 1");
   console.log("✅ MySQL connected");
 }
@@ -58,7 +57,6 @@ async function connectDb() {
 async function initTables() {
   if (!pool) return;
 
-  // Users table: buyer/provider
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -71,7 +69,6 @@ async function initTables() {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
-  // OTP table (basic)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS otp_codes (
       phone VARCHAR(20) NOT NULL,
@@ -82,15 +79,14 @@ async function initTables() {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
-  console.log("✅ Tables ensured (users, otp_codes)");
+  console.log("✅ Tables ensured: users, otp_codes");
 }
 
-// Health route
+// ---------- Routes ----------
 app.get("/", (req, res) => {
-  res.json({ success: true, message: "PremiumChat Backend is running" });
+  res.json({ ok: true, message: "PremiumChat Backend is running" });
 });
 
-// DB health check (اسی سے آپ کنفرم کر لیں گے DB connect ہے یا نہیں)
 app.get("/db/health", async (req, res) => {
   try {
     if (!pool) return res.status(500).json({ ok: false, message: "DB not configured" });
@@ -101,16 +97,17 @@ app.get("/db/health", async (req, res) => {
   }
 });
 
-// OTP APIs (basic demo)
+// Step-1: request OTP (demo)
 app.post("/auth/request-otp", async (req, res) => {
   const phone = String(req.body?.phone || "").trim();
-  if (!phone) return res.status(400).json({ success: false, message: "Phone required" });
+  if (!phone) return res.status(400).json({ ok: false, message: "Phone required" });
 
-  const code = "123456"; // demo
+  // demo otp
+  const code = "123456";
   const expiresMinutes = 5;
 
   try {
-    if (!pool) return res.status(500).json({ success: false, message: "DB not configured" });
+    if (!pool) return res.status(500).json({ ok: false, message: "DB not configured" });
 
     await pool.query("DELETE FROM otp_codes WHERE phone = ?", [phone]);
     await pool.query(
@@ -118,46 +115,47 @@ app.post("/auth/request-otp", async (req, res) => {
       [phone, code, expiresMinutes]
     );
 
-    res.json({ success: true, message: "OTP generated (demo: 123456)" });
+    res.json({ ok: true, message: "OTP generated (demo)", demoOtp: code });
   } catch (e) {
-    res.status(500).json({ success: false, message: String(e?.message || e) });
+    res.status(500).json({ ok: false, message: String(e?.message || e) });
   }
 });
 
+// Step-2: verify OTP
 app.post("/auth/verify-otp", async (req, res) => {
   const phone = String(req.body?.phone || "").trim();
   const otp = String(req.body?.otp || "").trim();
-  if (!phone || !otp) return res.status(400).json({ success: false, message: "Phone and otp required" });
+  if (!phone || !otp) return res.status(400).json({ ok: false, message: "Phone and otp required" });
 
   try {
-    if (!pool) return res.status(500).json({ success: false, message: "DB not configured" });
+    if (!pool) return res.status(500).json({ ok: false, message: "DB not configured" });
 
     const [rows] = await pool.query(
       "SELECT code, expires_at FROM otp_codes WHERE phone = ? ORDER BY created_at DESC LIMIT 1",
       [phone]
     );
 
-    if (!rows.length) return res.status(400).json({ success: false, message: "OTP not found" });
+    if (!rows || rows.length === 0) return res.status(400).json({ ok: false, message: "OTP not found" });
+
     const row = rows[0];
+    if (String(row.code) !== otp) return res.status(400).json({ ok: false, message: "Invalid OTP" });
 
-    if (row.code !== otp) return res.status(400).json({ success: false, message: "Invalid OTP" });
-
-    // expiry check
     const [expCheck] = await pool.query("SELECT NOW() <= ? AS ok", [row.expires_at]);
-    if (!expCheck[0].ok) return res.status(400).json({ success: false, message: "OTP expired" });
+    if (!expCheck[0]?.ok) return res.status(400).json({ ok: false, message: "OTP expired" });
 
-    // ensure user exists (default buyer)
+    // user ensure (default buyer)
     await pool.query(
       "INSERT INTO users (phone, role) VALUES (?, 'buyer') ON DUPLICATE KEY UPDATE phone=VALUES(phone)",
       [phone]
     );
 
-    res.json({ success: true, message: "OTP verified", phone });
+    res.json({ ok: true, message: "OTP verified", phone });
   } catch (e) {
-    res.status(500).json({ success: false, message: String(e?.message || e) });
+    res.status(500).json({ ok: false, message: String(e?.message || e) });
   }
 });
 
+// ---------- Start ----------
 (async () => {
   try {
     await connectDb();
@@ -166,5 +164,7 @@ app.post("/auth/verify-otp", async (req, res) => {
     console.log("❌ Startup error:", e?.message || e);
   }
 
-  app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+  app.listen(PORT, () => {
+    console.log(`🚀 Server running on port ${PORT}`);
+  });
 })();
