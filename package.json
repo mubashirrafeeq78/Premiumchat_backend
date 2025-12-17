@@ -1,10 +1,13 @@
 {
   "name": "premiumchat-backend",
   "version": "1.0.0",
-  "description": "Premium Chat Backend API",
+  "description": "Premium Chat Backend API (Node.js + MySQL)",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=18"
   },
   "dependencies": {
     "cors": "^2.8.5",
