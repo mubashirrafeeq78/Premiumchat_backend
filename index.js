@@ -1,89 +1,120 @@
-const express = require("express");
-const cors = require("cors");
-const { initDbAndTables } = require("./scripts/init-db");
+// index.js  — Premiumchat Backend (Provider Profile Save)
+// ---------------------------------------------
+import express from "express";
+import cors from "cors";
+import bodyParser from "body-parser";
+import mysql from "mysql2/promise";
 
 const app = express();
+
+// JSON body limit بڑھایا تاکہ base64 images آسکیں
 app.use(cors());
-app.use(express.json());
+app.use(bodyParser.json({ limit: "20mb" }));
+app.use(bodyParser.urlencoded({ extended: true, limit: "20mb" }));
 
-const PORT = process.env.PORT || 3000;
-
-let pool = null;
-
-app.get("/", (req, res) => {
-  res.json({ success: true, message: "PremiumChat Backend is running" });
+// ---- MySQL Pool (اپنے env کے مطابق بدل لیں) ----
+const pool = await mysql.createPool({
+  host: process.env.MYSQL_HOST || "localhost",
+  user: process.env.MYSQL_USER || "root",
+  password: process.env.MYSQL_PASSWORD || "",
+  database: process.env.MYSQL_DATABASE || "premiumchat",
+  waitForConnections: true,
+  connectionLimit: 10,
 });
 
-app.get("/db/health", async (req, res) => {
-  try {
-    if (!pool) return res.status(500).json({ ok: false, message: "DB not configured" });
-    await pool.query("SELECT 1");
-    res.json({ ok: true, message: "DB connected" });
-  } catch (e) {
-    res.status(500).json({ ok: false, message: String(e?.message || e) });
-  }
-});
+// ---------- Health ----------
+app.get("/", (_req, res) => res.json({ ok: true, service: "premiumchat-backend" }));
 
+// ---------- OTP (placeholders; اگر آپ کے پاس پہلے سے ہیں تو وہی رکھیں) ----------
 app.post("/auth/request-otp", async (req, res) => {
-  const phone = String(req.body?.phone || "").trim();
-  if (!phone) return res.status(400).json({ success: false, message: "Phone required" });
-
-  const code = "123456";
-  const expiresMinutes = 5;
-
-  try {
-    if (!pool) return res.status(500).json({ success: false, message: "DB not configured" });
-
-    await pool.query("DELETE FROM otp_codes WHERE phone = ?", [phone]);
-    await pool.query(
-      "INSERT INTO otp_codes (phone, code, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL ? MINUTE))",
-      [phone, code, expiresMinutes]
-    );
-
-    res.json({ success: true, message: "OTP generated (demo: 123456)" });
-  } catch (e) {
-    res.status(500).json({ success: false, message: String(e?.message || e) });
-  }
+  const { phone } = req.body || {};
+  if (!phone) return res.status(400).json({ success: false, message: "phone required" });
+  // TODO: اپنے OTP سسٹم سے جوڑیں
+  return res.json({ success: true, message: "OTP sent (stub)" });
 });
 
 app.post("/auth/verify-otp", async (req, res) => {
-  const phone = String(req.body?.phone || "").trim();
-  const otp = String(req.body?.otp || "").trim();
-  if (!phone || !otp) return res.status(400).json({ success: false, message: "Phone and otp required" });
+  const { phone, code } = req.body || {};
+  if (!phone || !code) return res.status(400).json({ success: false, message: "phone & code required" });
+  // TODO: verify
+  return res.json({ success: true, message: "OTP verified (stub)" });
+});
 
+// ---------- Provider Profile Save ----------
+app.post("/provider/profile", async (req, res) => {
   try {
-    if (!pool) return res.status(500).json({ success: false, message: "DB not configured" });
+    const {
+      phone,
+      name,
+      role, // "provider"
+      profileImageBase64,
+      cnicFrontBase64,
+      cnicBackBase64,
+    } = req.body || {};
 
-    const [rows] = await pool.query(
-      "SELECT code, expires_at FROM otp_codes WHERE phone = ? ORDER BY created_at DESC LIMIT 1",
-      [phone]
-    );
+    if (!phone) return res.status(400).json({ success: false, message: "phone required" });
+    if (!role || role !== "provider") {
+      return res.status(400).json({ success: false, message: "role must be 'provider'" });
+    }
 
-    if (!rows.length) return res.status(400).json({ success: false, message: "OTP not found" });
-    const row = rows[0];
+    // کچھ basic سائز چیکس (اپنی ضرورت کے مطابق)
+    const tooBig = (s) => (s ? s.length > 5_000_000 : false); // ~5MB base64
+    if (tooBig(profileImageBase64) || tooBig(cnicFrontBase64) || tooBig(cnicBackBase64)) {
+      return res.status(413).json({ success: false, message: "Image too large" });
+    }
 
-    if (row.code !== otp) return res.status(400).json({ success: false, message: "Invalid OTP" });
+    // Upsert provider row
+    const sql = `
+      INSERT INTO providers (phone, name, role, profile_image_b64, cnic_front_b64, cnic_back_b64, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, NOW())
+      ON DUPLICATE KEY UPDATE
+        name = VALUES(name),
+        role = VALUES(role),
+        profile_image_b64 = VALUES(profile_image_b64),
+        cnic_front_b64 = VALUES(cnic_front_b64),
+        cnic_back_b64 = VALUES(cnic_back_b64),
+        updated_at = NOW()
+    `;
+    await pool.query(sql, [
+      phone,
+      name || null,
+      role,
+      profileImageBase64 || null,
+      cnicFrontBase64 || null,
+      cnicBackBase64 || null,
+    ]);
 
-    const [expCheck] = await pool.query("SELECT NOW() <= ? AS ok", [row.expires_at]);
-    if (!expCheck[0].ok) return res.status(400).json({ success: false, message: "OTP expired" });
-
-    await pool.query(
-      "INSERT INTO users (phone, role) VALUES (?, 'buyer') ON DUPLICATE KEY UPDATE phone=VALUES(phone)",
-      [phone]
-    );
-
-    res.json({ success: true, message: "OTP verified", phone });
+    return res.json({ success: true, message: "Provider profile saved" });
   } catch (e) {
-    res.status(500).json({ success: false, message: String(e?.message || e) });
+    console.error(e);
+    return res.status(500).json({ success: false, message: e?.message || "Server error" });
   }
 });
 
-(async () => {
+// ---------- Current user fetch ----------
+app.get("/me", async (req, res) => {
   try {
-    pool = await initDbAndTables();
-  } catch (e) {
-    console.log("❌ Startup error:", e?.message || e);
-  }
+    const phone = req.query.phone;
+    if (!phone) return res.status(400).json({ success: false, message: "phone required" });
 
-  app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
-})();
+    const [rows] = await pool.query(
+      "SELECT phone, name, role, profile_image_b64, cnic_front_b64, cnic_back_b64, updated_at FROM providers WHERE phone = ? LIMIT 1",
+      [phone]
+    );
+
+    const user = rows?.[0] || null;
+    return res.json({ success: true, user });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ success: false, message: e?.message || "Server error" });
+  }
+});
+
+// ---------- 404 to JSON ----------
+app.use((_req, res) => {
+  res.status(404).json({ success: false, message: "Route not found" });
+});
+
+// ---------- Start ----------
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, () => console.log(`Premiumchat backend running on :${PORT}`));
