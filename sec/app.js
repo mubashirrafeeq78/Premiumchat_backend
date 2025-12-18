@@ -1,8 +1,10 @@
+// sec/app.js
 const express = require("express");
 const cors = require("cors");
 const { authRouter } = require("./auth.routes");
 const { profileRouter } = require("./profile.routes");
 const { notFound, errorHandler } = require("./middleware");
+const { config } = require("./config");
 
 function createApp() {
   const app = express();
@@ -16,11 +18,11 @@ function createApp() {
     })
   );
 
-  // ✅ Preflight requests (IMPORTANT for Web)
+  // ✅ Preflight (Web support)
   app.options("*", cors());
 
-  // ✅ Body parsers (Base64 images supported)
-  app.use(express.json({ limit: "10mb" }));
+  // ✅ Body parsers (central limit from config)
+  app.use(express.json({ limit: config.upload.jsonLimit }));
   app.use(express.urlencoded({ extended: true }));
 
   // ✅ Health check
