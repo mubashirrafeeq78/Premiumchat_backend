@@ -1,14 +1,14 @@
 {
   "name": "premiumchat-backend",
   "version": "1.0.0",
-  "main": "index.js",
+  "main": "src/server.js",
   "type": "commonjs",
   "scripts": {
-    "start": "node index.js"
+    "start": "node src/server.js",
+    "dev": "node src/server.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
-    "express": "^4.18.2",
-    "mysql2": "^3.9.7"
+    "express": "^4.19.2"
   }
 }
