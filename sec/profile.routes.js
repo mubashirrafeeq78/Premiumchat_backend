@@ -18,7 +18,7 @@ function cleanBase64(v, { maxLen = 8_000_000 } = {}) {
   if (idx !== -1) s = s.substring(idx + "base64,".length).trim();
 
   if (s.length > maxLen) {
-    const err = new Error("Image too large (compress more before upload)");
+    const err = new Error("Image too large");
     err.code = "PAYLOAD_TOO_LARGE";
     throw err;
   }
@@ -30,7 +30,9 @@ function providerInitialStatus() {
   return v === "approved" ? "approved" : "pending";
 }
 
-// -------- SAVE PROFILE --------
+/* =====================================================
+   SAVE PROFILE
+===================================================== */
 router.post("/save", requireAuth, async (req, res) => {
   const pool = getPool();
   const conn = await pool.getConnection();
@@ -38,71 +40,94 @@ router.post("/save", requireAuth, async (req, res) => {
   try {
     const phone = String(req.userPhone || "").trim();
     const name = String(req.body?.name || "").trim();
-    const role = String(req.body?.role || "").trim();
+    const role = String(req.body?.role || "").trim(); // buyer | provider
 
-    const profilePicBase64 = cleanBase64(req.body?.profilePicBase64 || req.body?.avatarBase64);
+    const avatarBase64 = cleanBase64(
+      req.body?.profilePicBase64 || req.body?.avatarBase64
+    );
+
     const cnicFrontBase64 = cleanBase64(req.body?.cnicFrontBase64);
     const cnicBackBase64 = cleanBase64(req.body?.cnicBackBase64);
     const selfieBase64 = cleanBase64(req.body?.selfieBase64);
 
     if (!phone) return jsonError(res, 400, "Phone missing");
     if (!name) return jsonError(res, 400, "Name required");
-    if (!["buyer", "provider"].includes(role)) return jsonError(res, 400, "Invalid role");
+    if (!["buyer", "provider"].includes(role))
+      return jsonError(res, 400, "Invalid role");
 
     await conn.beginTransaction();
 
-    // ---------- BUYER ----------
+    /* ---------------- BUYER ---------------- */
     if (role === "buyer") {
       await conn.execute(
-        `INSERT INTO buyers (phone, name, profile_pic_base64)
-         VALUES (?, ?, ?)
-         ON DUPLICATE KEY UPDATE
-           name=VALUES(name),
-           profile_pic_base64=VALUES(profile_pic_base64)`,
-        [phone, name, profilePicBase64 || null]
+        `
+        INSERT INTO buyer_profiles (phone, name, avatar_base64)
+        VALUES (?, ?, ?)
+        ON DUPLICATE KEY UPDATE
+          name = VALUES(name),
+          avatar_base64 = VALUES(avatar_base64)
+        `,
+        [phone, name, avatarBase64 || null]
       );
 
       const [rows] = await conn.execute(
-        `SELECT id, phone, name, profile_pic_base64 AS avatarBase64
-         FROM buyers WHERE phone=? LIMIT 1`,
+        `
+        SELECT id, phone, name, avatar_base64 AS avatarBase64
+        FROM buyer_profiles
+        WHERE phone = ?
+        LIMIT 1
+        `,
         [phone]
       );
 
       await conn.commit();
-      return res.json({ success: true, role: "buyer", user: rows[0] });
+      return res.json({
+        success: true,
+        role: "buyer",
+        user: rows[0],
+      });
     }
 
-    // ---------- PROVIDER ----------
+    /* ---------------- PROVIDER ---------------- */
     if (!cnicFrontBase64 || !cnicBackBase64 || !selfieBase64) {
       return jsonError(res, 400, "Provider verification required");
     }
 
-    const initStatus = providerInitialStatus();
+    const status = providerInitialStatus();
 
     await conn.execute(
-      `INSERT INTO providers (phone, name, profile_pic_base64, status)
-       VALUES (?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE
-         name=VALUES(name),
-         profile_pic_base64=VALUES(profile_pic_base64),
-         status=IF(status IN ('approved','rejected'), status, VALUES(status))`,
-      [phone, name, profilePicBase64 || null, initStatus]
+      `
+      INSERT INTO provider_profiles
+        (phone, name, avatar_base64, status,
+         cnic_front_base64, cnic_back_base64, selfie_base64)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON DUPLICATE KEY UPDATE
+        name = VALUES(name),
+        avatar_base64 = VALUES(avatar_base64),
+        cnic_front_base64 = VALUES(cnic_front_base64),
+        cnic_back_base64 = VALUES(cnic_back_base64),
+        selfie_base64 = VALUES(selfie_base64),
+        status = IF(status IN ('approved','rejected'), status, VALUES(status))
+      `,
+      [
+        phone,
+        name,
+        avatarBase64 || null,
+        status,
+        cnicFrontBase64,
+        cnicBackBase64,
+        selfieBase64,
+      ]
     );
 
-    const [provRows] = await conn.execute(
-      `SELECT id, phone, name, profile_pic_base64 AS avatarBase64, status
-       FROM providers WHERE phone=? LIMIT 1`,
+    const [rows] = await conn.execute(
+      `
+      SELECT id, phone, name, avatar_base64 AS avatarBase64, status
+      FROM provider_profiles
+      WHERE phone = ?
+      LIMIT 1
+      `,
       [phone]
-    );
-
-    const provider = provRows[0];
-    if (!provider) throw new Error("Provider save failed");
-
-    await conn.execute(
-      `INSERT INTO provider_documents
-       (provider_id, cnic_front_base64, cnic_back_base64, selfie_base64)
-       VALUES (?, ?, ?, ?)`,
-      [provider.id, cnicFrontBase64, cnicBackBase64, selfieBase64]
     );
 
     await conn.commit();
@@ -110,39 +135,63 @@ router.post("/save", requireAuth, async (req, res) => {
     return res.json({
       success: true,
       role: "provider",
-      status: provider.status === "approved" ? "approved" : "submitted",
-      user: provider,
+      status: rows[0].status === "approved" ? "approved" : "submitted",
+      user: rows[0],
     });
   } catch (e) {
     await conn.rollback();
-    if (e?.code === "PAYLOAD_TOO_LARGE") return jsonError(res, 413, e.message);
+    if (e?.code === "PAYLOAD_TOO_LARGE")
+      return jsonError(res, 413, e.message);
     return jsonError(res, 500, e.message || "Profile save failed");
   } finally {
     conn.release();
   }
 });
 
-// -------- GET CURRENT USER --------
+/* =====================================================
+   GET CURRENT USER
+===================================================== */
 router.get("/me", requireAuth, async (req, res) => {
   try {
     const phone = String(req.userPhone || "").trim();
     const pool = getPool();
 
     const [buyers] = await pool.execute(
-      `SELECT id, phone, name, profile_pic_base64 AS avatarBase64
-       FROM buyers WHERE phone=? LIMIT 1`,
+      `
+      SELECT id, phone, name, avatar_base64 AS avatarBase64
+      FROM buyer_profiles
+      WHERE phone = ?
+      LIMIT 1
+      `,
       [phone]
     );
-    if (buyers.length) return res.json({ success: true, role: "buyer", user: buyers[0] });
+
+    if (buyers.length) {
+      return res.json({
+        success: true,
+        role: "buyer",
+        user: buyers[0],
+      });
+    }
 
     const [providers] = await pool.execute(
-      `SELECT id, phone, name, profile_pic_base64 AS avatarBase64, status
-       FROM providers WHERE phone=? LIMIT 1`,
+      `
+      SELECT id, phone, name, avatar_base64 AS avatarBase64, status
+      FROM provider_profiles
+      WHERE phone = ?
+      LIMIT 1
+      `,
       [phone]
     );
-    if (!providers.length) return jsonError(res, 404, "User not found");
 
-    return res.json({ success: true, role: "provider", user: providers[0] });
+    if (!providers.length)
+      return jsonError(res, 404, "User not found");
+
+    return res.json({
+      success: true,
+      role: "provider",
+      user: providers[0],
+    });
   } catch (e) {
     return jsonError(res, 500, e.message || "Failed");
   }
