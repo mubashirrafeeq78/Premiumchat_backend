@@ -5,7 +5,8 @@
   "type": "commonjs",
   "scripts": {
     "start": "node sec/server.js",
-    "dev": "node sec/server.js"
+    "dev": "node sec/server.js",
+    "init-db": "node sec/scripts/init-db.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
