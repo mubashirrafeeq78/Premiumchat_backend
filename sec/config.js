@@ -16,28 +16,50 @@ function getEnvInt(name, fallback) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+// ✅ Support MYSQL_URL as well (e.g. mysql://user:pass@host:3306/dbname)
+function parseMysqlUrl(url) {
+  try {
+    const u = new URL(url);
+    if (!u.hostname) return null;
+
+    const host = u.hostname;
+    const port = u.port ? Number(u.port) : 3306;
+    const user = decodeURIComponent(u.username || "");
+    const password = decodeURIComponent(u.password || "");
+    const database = (u.pathname || "").replace(/^\//, "");
+
+    if (!host || !user || !database) return null;
+
+    return { host, port, user, password, database };
+  } catch (_) {
+    return null;
+  }
+}
+
+const mysqlUrl = getEnv("MYSQL_URL");
+const parsed = mysqlUrl ? parseMysqlUrl(mysqlUrl) : null;
+
 const config = {
   port: getEnvInt("PORT", 8080),
 
   // OTP demo mode (backend demo OTP return)
   allowDemoOtp: getEnvBool("ALLOW_DEMO_OTP", "1"),
 
-  // ✅ MySQL Config (Railway/Any server)
+  // ✅ MySQL Config (works with MYSQL_URL OR split vars)
   db: {
-    host: getEnv("MYSQLHOST"),
-    user: getEnv("MYSQLUSER"),
-    password: getEnv("MYSQLPASSWORD", ""), // can be empty if your DB has no password
-    database: getEnv("MYSQLDATABASE"),
-    port: getEnvInt("MYSQLPORT", 3306),
+    host: parsed?.host ?? getEnv("MYSQLHOST"),
+    user: parsed?.user ?? getEnv("MYSQLUSER"),
+    password: parsed?.password ?? getEnv("MYSQLPASSWORD", ""),
+    database: parsed?.database ?? getEnv("MYSQLDATABASE"),
+    port: parsed?.port ?? getEnvInt("MYSQLPORT", 3306),
 
-    // pool settings (stable + low load)
+    // pool settings
     connectionLimit: getEnvInt("MYSQL_POOL_LIMIT", 10),
     connectTimeout: getEnvInt("MYSQL_CONNECT_TIMEOUT", 10000),
   },
 
   // Upload limits (base64 payload control)
   upload: {
-    // 10mb is OK for compressed images; you can lower later
     jsonLimit: getEnv("JSON_LIMIT", "10mb"),
   },
 
@@ -45,13 +67,11 @@ const config = {
   providerDefaultStatus: getEnv("PROVIDER_DEFAULT_STATUS", "submitted"), // submitted|approved
 };
 
-// ✅ helper: DB required check (only when you actually use DB code)
 function assertDbEnv() {
   const missing = [];
-  if (!config.db.host) missing.push("MYSQLHOST");
-  if (!config.db.user) missing.push("MYSQLUSER");
-  if (!config.db.database) missing.push("MYSQLDATABASE");
-  // MYSQLPASSWORD optional (depends on DB)
+  if (!config.db.host) missing.push("MYSQLHOST (or MYSQL_URL)");
+  if (!config.db.user) missing.push("MYSQLUSER (or MYSQL_URL)");
+  if (!config.db.database) missing.push("MYSQLDATABASE (or MYSQL_URL)");
   if (missing.length) {
     const msg = `DB env missing: ${missing.join(", ")} (and MYSQLPASSWORD if set)`;
     const err = new Error(msg);
