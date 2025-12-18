@@ -1,27 +1,25 @@
 /**
- * scripts/init-db.js
+ * sec/scripts/init-db.js
+ * Run:
+ *   node sec/scripts/init-db.js
  *
- * Requirements:
- *   npm i mysql2
- *
- * Env (Railway MySQL commonly provides these):
+ * Needs env:
  *   MYSQLHOST, MYSQLPORT, MYSQLUSER, MYSQLPASSWORD, MYSQLDATABASE
- *   (If your vars are different, adjust below)
  */
 
 const mysql = require("mysql2/promise");
 
-async function main() {
-  const host = process.env.MYSQLHOST || process.env.DB_HOST;
-  const port = Number(process.env.MYSQLPORT || process.env.DB_PORT || 3306);
-  const user = process.env.MYSQLUSER || process.env.DB_USER;
-  const password = process.env.MYSQLPASSWORD || process.env.DB_PASSWORD;
-  const database = process.env.MYSQLDATABASE || process.env.DB_NAME;
+function must(v, name) {
+  if (!v || String(v).trim() === "") throw new Error(`Missing env: ${name}`);
+  return String(v).trim();
+}
 
-  if (!host || !user || !database) {
-    console.error("Missing DB env vars. Need MYSQLHOST, MYSQLUSER, MYSQLDATABASE (and password if set).");
-    process.exit(1);
-  }
+async function main() {
+  const host = must(process.env.MYSQLHOST, "MYSQLHOST");
+  const port = Number(process.env.MYSQLPORT || 3306);
+  const user = must(process.env.MYSQLUSER, "MYSQLUSER");
+  const password = process.env.MYSQLPASSWORD || "";
+  const database = must(process.env.MYSQLDATABASE, "MYSQLDATABASE");
 
   const conn = await mysql.createConnection({
     host,
@@ -33,67 +31,79 @@ async function main() {
   });
 
   const queries = [
-    // Ensure charset
     `SET NAMES utf8mb4;`,
 
-    // BUYERS
+    // MASTER USERS (buyer + provider)
     `
-    CREATE TABLE IF NOT EXISTS buyers (
+    CREATE TABLE IF NOT EXISTS users (
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
       phone VARCHAR(20) NOT NULL,
       name VARCHAR(120) NOT NULL,
+      role ENUM('buyer','provider') NOT NULL,
       profile_pic_base64 LONGTEXT NULL,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       PRIMARY KEY (id),
-      UNIQUE KEY uq_buyers_phone (phone)
+      UNIQUE KEY uq_users_phone (phone)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `,
 
-    // PROVIDERS
+    // PROVIDER PROFILE (status, approval fields)
     `
-    CREATE TABLE IF NOT EXISTS providers (
-      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-      phone VARCHAR(20) NOT NULL,
-      name VARCHAR(120) NOT NULL,
-      profile_pic_base64 LONGTEXT NULL,
+    CREATE TABLE IF NOT EXISTS provider_profiles (
+      user_id BIGINT UNSIGNED NOT NULL,
       status ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending',
-      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-      PRIMARY KEY (id),
-      UNIQUE KEY uq_providers_phone (phone)
+      approved_at TIMESTAMP NULL,
+      rejected_reason VARCHAR(255) NULL,
+      PRIMARY KEY (user_id),
+      CONSTRAINT fk_provider_profiles_user
+        FOREIGN KEY (user_id) REFERENCES users(id)
+        ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `,
 
-    // PROVIDER DOCUMENTS (CNIC Front/Back + Selfie)
+    // PROVIDER DOCUMENTS (submissions history)
     `
     CREATE TABLE IF NOT EXISTS provider_documents (
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-      provider_id BIGINT UNSIGNED NOT NULL,
+      user_id BIGINT UNSIGNED NOT NULL,
       cnic_front_base64 LONGTEXT NULL,
       cnic_back_base64 LONGTEXT NULL,
       selfie_base64 LONGTEXT NULL,
       submitted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       PRIMARY KEY (id),
-      KEY idx_provider_documents_provider_id (provider_id),
-      CONSTRAINT fk_provider_documents_provider
-        FOREIGN KEY (provider_id) REFERENCES providers(id)
+      KEY idx_provider_docs_user (user_id),
+      CONSTRAINT fk_provider_docs_user
+        FOREIGN KEY (user_id) REFERENCES users(id)
         ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `,
+
+    // OTP CODES (production ready)
+    `
+    CREATE TABLE IF NOT EXISTS otp_codes (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      phone VARCHAR(20) NOT NULL,
+      otp VARCHAR(10) NOT NULL,
+      expires_at BIGINT NOT NULL,
+      used TINYINT(1) NOT NULL DEFAULT 0,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_otp_phone (phone),
+      KEY idx_otp_expires (expires_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `,
   ];
 
   try {
-    for (const q of queries) {
-      await conn.execute(q);
-    }
-    console.log("✅ DB tables created/verified: buyers, providers, provider_documents");
+    for (const q of queries) await conn.execute(q);
+    console.log("✅ DB ready: users, provider_profiles, provider_documents, otp_codes");
   } finally {
     await conn.end();
   }
 }
 
 main().catch((e) => {
-  console.error("❌ init-db failed:", e);
+  console.error("❌ init-db failed:", e.message || e);
   process.exit(1);
 });
