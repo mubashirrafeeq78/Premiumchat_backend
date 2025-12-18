@@ -7,15 +7,36 @@ const { notFound, errorHandler } = require("./middleware");
 function createApp() {
   const app = express();
 
-  app.use(cors({ origin: "*", methods: ["GET", "POST"], allowedHeaders: ["Content-Type", "Authorization"] }));
-  app.use(express.json({ limit: "10mb" })); // base64 images size control
+  // ✅ CORS – Flutter Web + Mobile compatible
+  app.use(
+    cors({
+      origin: "*",
+      methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+      allowedHeaders: ["Content-Type", "Authorization"],
+    })
+  );
+
+  // ✅ Preflight requests (IMPORTANT for Web)
+  app.options("*", cors());
+
+  // ✅ Body parsers (Base64 images supported)
+  app.use(express.json({ limit: "10mb" }));
   app.use(express.urlencoded({ extended: true }));
 
-  app.get("/", (req, res) => res.json({ success: true, message: "PremiumChat API running" }));
+  // ✅ Health check
+  app.get("/", (req, res) => {
+    res.json({
+      success: true,
+      message: "PremiumChat API running",
+      time: new Date().toISOString(),
+    });
+  });
 
+  // ✅ Routes
   app.use("/auth", authRouter);
   app.use("/profile", profileRouter);
 
+  // ✅ Error handlers
   app.use(notFound);
   app.use(errorHandler);
 
