@@ -6,7 +6,7 @@ const { config } = require("./config");
 const router = express.Router();
 
 function genOtp() {
-  return String(Math.floor(100000 + Math.random() * 900000)); // 6 digits
+  return String(Math.floor(100000 + Math.random() * 900000));
 }
 
 router.post("/request-otp", async (req, res) => {
@@ -16,19 +16,17 @@ router.post("/request-otp", async (req, res) => {
 
     const otp = genOtp();
 
-    // ✅ DATETIME expiry (5 minutes from now)
     await query(
-      `INSERT INTO otp_codes (phone, code, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 5 MINUTE))`,
+      `INSERT INTO otp_codes (phone, code, expires_at)
+       VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 5 MINUTE))`,
       [phone, otp]
     );
-
-    const showOtp = config.allowDemoOtp === true;
 
     return res.json({
       success: true,
       message: "OTP sent",
       phone,
-      ...(showOtp ? { otp } : {}),
+      ...(config.allowDemoOtp ? { otp } : {}),
       time: nowIso(),
     });
   } catch (e) {
@@ -43,40 +41,27 @@ router.post("/verify-otp", async (req, res) => {
     if (!phone) return jsonError(res, 400, "Phone required");
     if (!otp) return jsonError(res, 400, "OTP required");
 
+    // ✅ id نہیں لیں گے (کیونکہ ٹیبل میں id نہیں ہے)
     const rows = await query(
-      `SELECT id, code, expires_at, used_at
+      `SELECT code, expires_at
        FROM otp_codes
        WHERE phone=?
-       ORDER BY id DESC
+       ORDER BY expires_at DESC
        LIMIT 1`,
       [phone]
     );
 
     const rec = rows?.[0];
     if (!rec) return jsonError(res, 400, "OTP not requested");
-    if (rec.used_at) return jsonError(res, 400, "OTP already used");
 
-    // ✅ expires_at is DATETIME
     if (new Date(rec.expires_at).getTime() < Date.now()) {
       return jsonError(res, 400, "OTP expired");
     }
 
     if (String(rec.code) !== otp) return jsonError(res, 400, "Invalid OTP");
 
-    await query(`UPDATE otp_codes SET used_at=NOW() WHERE id=?`, [rec.id]);
-
-    await query(
-      `INSERT INTO users (phone, role, name)
-       VALUES (?, 'buyer', '')
-       ON DUPLICATE KEY UPDATE phone=VALUES(phone)`,
-      [phone]
-    );
-
-    const me = await query(
-      `SELECT id, phone, role, name, avatar_base64 AS avatarBase64, created_at, updated_at
-       FROM users WHERE phone=? LIMIT 1`,
-      [phone]
-    );
+    // ✅ verify کے بعد OTP row delete کر دیں (used_at/id کی ضرورت نہیں)
+    await query(`DELETE FROM otp_codes WHERE phone=? AND code=? LIMIT 1`, [phone, otp]);
 
     const token = `phone:${phone}`;
 
@@ -84,7 +69,7 @@ router.post("/verify-otp", async (req, res) => {
       success: true,
       message: "OTP verified",
       token,
-      user: me?.[0] || null,
+      user: { phone },
     });
   } catch (e) {
     return jsonError(res, 500, String(e?.message || e));
