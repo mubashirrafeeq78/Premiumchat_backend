@@ -7,6 +7,7 @@ const { config } = require("./config");
 
 const router = express.Router();
 
+// ---- base64 cleaner ----
 function cleanBase64(v, { maxLen = 8_000_000 } = {}) {
   let s = String(v || "").trim();
   if (!s) return "";
@@ -25,8 +26,47 @@ function providerInitialStatus() {
   return v === "approved" ? "approved" : "pending";
 }
 
+// ---- AUTO MIGRATION (fix unknown column issues) ----
+let _schemaChecked = false;
+
+async function columnExists(table, column) {
+  const rows = await query(
+    `SELECT 1
+     FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE()
+       AND TABLE_NAME = ?
+       AND COLUMN_NAME = ?
+     LIMIT 1`,
+    [table, column]
+  );
+  return Array.isArray(rows) && rows.length > 0;
+}
+
+async function addColumnIfMissing(table, column, ddl) {
+  const exists = await columnExists(table, column);
+  if (!exists) {
+    await query(`ALTER TABLE \`${table}\` ADD COLUMN ${ddl}`);
+  }
+}
+
+async function ensureProfileColumns() {
+  if (_schemaChecked) return;
+  try {
+    // buyers/providers tables must have avatar_base64
+    await addColumnIfMissing("buyers", "avatar_base64", "`avatar_base64` LONGTEXT NULL");
+    await addColumnIfMissing("providers", "avatar_base64", "`avatar_base64` LONGTEXT NULL");
+  } catch (_) {
+    // ignore here; actual query will surface real error if tables missing
+  } finally {
+    _schemaChecked = true;
+  }
+}
+
+// ---- SAVE PROFILE ----
 router.post("/save", requireAuth, async (req, res) => {
   try {
+    await ensureProfileColumns(); // ✅ auto-fix column missing
+
     const phone = String(req.userPhone || "").trim();
     const name = String(req.body?.name || "").trim();
     const role = String(req.body?.role || "").trim();
@@ -103,8 +143,11 @@ router.post("/save", requireAuth, async (req, res) => {
   }
 });
 
+// ---- GET ME ----
 router.get("/me", requireAuth, async (req, res) => {
   try {
+    await ensureProfileColumns();
+
     const phone = String(req.userPhone || "").trim();
     if (!phone) return jsonError(res, 400, "Phone missing (token)");
 
