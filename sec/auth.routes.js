@@ -15,11 +15,11 @@ router.post("/request-otp", async (req, res) => {
     if (!phone) return jsonError(res, 400, "Phone required");
 
     const otp = genOtp();
-    const expiresAt = Date.now() + 5 * 60 * 1000;
 
+    // ✅ DATETIME expiry (5 minutes from now)
     await query(
-      `INSERT INTO otp_codes (phone, code, expires_at) VALUES (?, ?, ?)`,
-      [phone, otp, expiresAt]
+      `INSERT INTO otp_codes (phone, code, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 5 MINUTE))`,
+      [phone, otp]
     );
 
     const showOtp = config.allowDemoOtp === true;
@@ -43,7 +43,6 @@ router.post("/verify-otp", async (req, res) => {
     if (!phone) return jsonError(res, 400, "Phone required");
     if (!otp) return jsonError(res, 400, "OTP required");
 
-    // latest valid otp
     const rows = await query(
       `SELECT id, code, expires_at, used_at
        FROM otp_codes
@@ -56,13 +55,16 @@ router.post("/verify-otp", async (req, res) => {
     const rec = rows?.[0];
     if (!rec) return jsonError(res, 400, "OTP not requested");
     if (rec.used_at) return jsonError(res, 400, "OTP already used");
-    if (Date.now() > Number(rec.expires_at)) return jsonError(res, 400, "OTP expired");
+
+    // ✅ expires_at is DATETIME
+    if (new Date(rec.expires_at).getTime() < Date.now()) {
+      return jsonError(res, 400, "OTP expired");
+    }
+
     if (String(rec.code) !== otp) return jsonError(res, 400, "Invalid OTP");
 
-    // mark used
     await query(`UPDATE otp_codes SET used_at=NOW() WHERE id=?`, [rec.id]);
 
-    // ensure user row exists
     await query(
       `INSERT INTO users (phone, role, name)
        VALUES (?, 'buyer', '')
@@ -76,7 +78,7 @@ router.post("/verify-otp", async (req, res) => {
       [phone]
     );
 
-    const token = `phone:${phone}`; // demo token
+    const token = `phone:${phone}`;
 
     return res.json({
       success: true,
