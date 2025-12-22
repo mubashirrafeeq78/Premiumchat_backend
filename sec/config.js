@@ -29,7 +29,6 @@ function parseMysqlUrl(url) {
     const database = (u.pathname || "").replace(/^\//, "");
 
     if (!host || !user || !database) return null;
-
     return { host, port, user, password, database };
   } catch (_) {
     return null;
@@ -39,11 +38,18 @@ function parseMysqlUrl(url) {
 const mysqlUrl = getEnv("MYSQL_URL");
 const parsed = mysqlUrl ? parseMysqlUrl(mysqlUrl) : null;
 
+const nodeEnv = getEnv("NODE_ENV", "development");
+const isProd = nodeEnv === "production";
+
 const config = {
+  env: nodeEnv,
   port: getEnvInt("PORT", 8080),
 
-  // OTP demo mode (backend demo OTP return)
-  allowDemoOtp: getEnvBool("ALLOW_DEMO_OTP", "1"),
+  // ✅ OTP secret (production میں لازمی)
+  otpSecret: getEnv("OTP_SECRET"),
+
+  // OTP demo mode (production میں default OFF)
+  allowDemoOtp: getEnvBool("ALLOW_DEMO_OTP", isProd ? "0" : "1"),
 
   // ✅ MySQL Config (works with MYSQL_URL OR split vars)
   db: {
@@ -53,18 +59,19 @@ const config = {
     database: parsed?.database ?? getEnv("MYSQLDATABASE"),
     port: parsed?.port ?? getEnvInt("MYSQLPORT", 3306),
 
+    // SSL for remote MySQL (optional)
+    ssl: getEnvBool("MYSQL_SSL", "0"),
+
     // pool settings
     connectionLimit: getEnvInt("MYSQL_POOL_LIMIT", 10),
     connectTimeout: getEnvInt("MYSQL_CONNECT_TIMEOUT", 10000),
   },
 
-  // Upload limits (base64 payload control)
   upload: {
     jsonLimit: getEnv("JSON_LIMIT", "10mb"),
   },
 
-  // Provider flow default status after submit
-  providerDefaultStatus: getEnv("PROVIDER_DEFAULT_STATUS", "submitted"), // submitted|approved
+  providerDefaultStatus: getEnv("PROVIDER_DEFAULT_STATUS", "submitted"),
 };
 
 function assertDbEnv() {
@@ -76,6 +83,13 @@ function assertDbEnv() {
     const msg = `DB env missing: ${missing.join(", ")} (and MYSQLPASSWORD if set)`;
     const err = new Error(msg);
     err.code = "DB_ENV_MISSING";
+    throw err;
+  }
+
+  // ✅ production میں OTP_SECRET لازمی رکھیں
+  if (isProd && !config.otpSecret) {
+    const err = new Error("OTP_SECRET is required in production");
+    err.code = "OTP_SECRET_MISSING";
     throw err;
   }
 }
