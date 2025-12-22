@@ -32,10 +32,10 @@ router.post("/request-otp", async (req, res) => {
     const hash = otpHash(phone, otp);
 
     // ✅ one active OTP per phone (delete old then insert new)
-    await query(`DELETE FROM otp_verification WHERE phone=?`, [phone]);
+    await query(`DELETE FROM otp_codes WHERE phone=?`, [phone]);
 
     await query(
-      `INSERT INTO otp_verification (phone, otp_hash, created_at, expires_at)
+      `INSERT INTO otp_codes (phone, otp_hash, created_at, expires_at)
        VALUES (?, ?, NOW(), DATE_ADD(NOW(), INTERVAL 1 MINUTE))`,
       [phone, hash]
     );
@@ -64,7 +64,7 @@ router.post("/verify-otp", async (req, res) => {
 
     const rows = await query(
       `SELECT otp_hash, expires_at
-       FROM otp_verification
+       FROM otp_codes
        WHERE phone=?
        ORDER BY id DESC
        LIMIT 1`,
@@ -82,7 +82,7 @@ router.post("/verify-otp", async (req, res) => {
     if (String(rec.otp_hash) !== hash) return jsonError(res, 400, "Invalid OTP");
 
     // ✅ OTP used => delete
-    await query(`DELETE FROM otp_verification WHERE phone=?`, [phone]);
+    await query(`DELETE FROM otp_codes WHERE phone=?`, [phone]);
 
     const token = `phone:${phone}`; // your existing demo token format
 
