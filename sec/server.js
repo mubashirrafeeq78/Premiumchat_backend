@@ -2,11 +2,12 @@ const { createApp } = require("./app");
 const { config } = require("./config");
 
 const app = createApp();
-const port = config.port || 8080;
 
-// ✅ Start server (NO schema, NO auto DB changes)
-app.listen(port, () => {
-  console.log(`🚀 PremiumChat backend running on port ${port}`);
+// 🔴 Railway-compatible PORT
+const PORT = process.env.PORT || config.port || 8080;
+
+app.listen(PORT, () => {
+  console.log(`🚀 PremiumChat backend running on port ${PORT}`);
 });
 
 // Safety: unhandled errors
