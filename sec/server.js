@@ -1,3 +1,6 @@
+// sec/server.js
+require("dotenv").config(); // ✅ .env لوڈ کرے گا
+
 const { createApp } = require("./app");
 const { config } = require("./config");
 
